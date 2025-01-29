@@ -1,0 +1,6 @@
+source "C:/Users/john/Development/esp_fork/esp-idf/components/bootloader/Kconfig.projbuild"
+source "C:/Users/john/Development/esp_fork/esp-idf/components/esp_app_format/Kconfig.projbuild"
+source "C:/Users/john/Development/esp_fork/esp-idf/components/esp_rom/Kconfig.projbuild"
+source "C:/Users/john/Development/esp_fork/esp-idf/components/esptool_py/Kconfig.projbuild"
+source "C:/Users/john/Development/esp_fork/esp-idf/components/partition_table/Kconfig.projbuild"
+source "C:/Users/john/Development/pyramid_clock/eleven_bit_clock/main/Kconfig.projbuild"

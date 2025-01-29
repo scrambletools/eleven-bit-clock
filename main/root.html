@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <link rel="stylesheet" href="/css">
+    <title>Pyramid Clock</title>
+  </head>
+  <body>
+    <h1>Pyramid Clock</h1><br/>
+    <form action="/" method="post">
+        <label for="p">Clock Password</label><input type="text" name="p" placeholder="required"><br/>
+        <br/>
+        <label for="np">Change Password</label><input type="text" name="np"><br/>
+        <label for="npc">Confirm Password</label><input type="text" name="npc"><br/>
+        <br/>
+        <label for="ntp_server_1">NTP Server 1</label><input type="text" name="ntp_server_1" value="{{ntp_server_1}}"><br/>
+        <label for="ntp_server_2">NTP Server 2</label><input type="text" name="ntp_server_2" value="{{ntp_server_2}}"><br/>
+        <label for="clock_gmt_offset">GMT Offset</label><select name="gmt_offset">
+            {{gmt_offset}}
+        </select><br/>
+        <br/>
+        <label for="active_preset">Active Preset</label><select name="active_preset">
+            {{active_preset}}
+        </select><br/>
+        <button type="button" class="accordion">Preset 1</button>
+        <div class="panel">
+            <label for="p1_name">Preset Name</label><input type="text" name="p1_name" value="{{p1_name}}"><br/><br/>
+            <table>
+            <tr><td><label>AM</label></td>
+            <td><label for="p1_am_color">RGB</label><input type="color" name="p1_am_color" value="{{p1_am_color}}" style="width: 40px; vertical-align: middle;">
+            <label for="p1_am_white">White</label><input type="range" name="p1_am_white" min="0" max="255" value="{{p1_am_white}}" step="1" style="width: 150px; vertical-align: middle;">
+            </td></tr>
+            <tr><td><label>PM</label></td>
+            <td><label for="p1_pm_color">RGB</label><input type="color" name="p1_pm_color" value="{{p1_pm_color}}" style="width: 40px; vertical-align: middle;">
+            <label for="p1_pm_white">White</label><input type="range" name="p1_pm_white" min="0" max="255" value="{{p1_pm_white}}" step="1" style="width: 150px; vertical-align: middle;">
+            </td></tr>
+            <tr><td><label>HR0</label></td>
+            <td><label for="p1_hr0_color">RGB</label><input type="color" name="p1_hr0_color" value="{{p1_hr0_color}}" style="width: 40px; vertical-align: middle;">
+            <label for="p1_hr0_white">White</label><input type="range" name="p1_hr0_white" min="0" max="255" value="{{p1_hr0_white}}" step="1" style="width: 150px; vertical-align: middle;">
+            </td></tr>
+            <tr><td><label>HR1</label></td>
+            <td><label for="p1_hr1_color">RGB</label><input type="color" name="p1_hr1_color" value="{{p1_hr1_color}}" style="width: 40px; vertical-align: middle;">
+            <label for="p1_hr1_white">White</label><input type="range" name="p1_hr1_white" min="0" max="255" value="{{p1_hr1_white}}" step="1" style="width: 150px; vertical-align: middle;">
+            </td></tr>
+            <tr><td><label>MIN0</label></td>
+            <td><label for="p1_min0_color">RGB</label><input type="color" name="p1_min0_color" value="{{p1_min0_color}}" style="width: 40px; vertical-align: middle;">
+            <label for="p1_min0_white">White</label><input type="range" name="p1_min0_white" min="0" max="255" value="{{p1_min0_white}}" step="1" style="width: 150px; vertical-align: middle;">
+            </td></tr>
+            <tr><td><label>MIN1</label></td>
+            <td><label for="p1_min1_color">RGB</label><input type="color" name="p1_min1_color" value="{{p1_min1_color}}" style="width: 40px; vertical-align: middle;">
+            <label for="p1_min1_white">White</label><input type="range" name="p1_min1_white" min="0" max="255" value="{{p1_min1_white}}" step="1" style="width: 150px; vertical-align: middle;">
+            </td></tr>
+            </table>
+        </div>
+        <button type="button" class="accordion">Preset 2</button>
+        <div class="panel">
+            <label for="p2_name">Preset Name</label><input type="text" name="p2_name" value="{{p2_name}}"><br/><br/>
+            <table>
+            <tr><td><label>AM</label></td>
+            <td><label for="p2_am_color">RGB</label><input type="color" name="p2_am_color" value="{{p2_am_color}}" style="width: 40px; vertical-align: middle;">
+            <label for="p2_am_white">White</label><input type="range" name="p2_am_white" min="0" max="255" value="{{p2_am_white}}" step="1" style="width: 150px; vertical-align: middle;">
+            </td></tr>
+            <tr><td><label>PM</label></td>
+            <td><label for="p2_pm_color">RGB</label><input type="color" name="p2_pm_color" value="{{p2_pm_color}}" style="width: 40px; vertical-align: middle;">
+            <label for="p2_pm_white">White</label><input type="range" name="p2_pm_white" min="0" max="255" value="{{p2_pm_white}}" step="1" style="width: 150px; vertical-align: middle;">
+            </td></tr>
+            <tr><td><label>HR0</label></td>
+            <td><label for="p2_hr0_color">RGB</label><input type="color" name="p2_hr0_color" value="{{p2_hr0_color}}" style="width: 40px; vertical-align: middle;">
+            <label for="p2_hr0_white">White</label><input type="range" name="p2_hr0_white" min="0" max="255" value="{{p2_hr0_white}}" step="1" style="width: 150px; vertical-align: middle;">
+            </td></tr>
+            <tr><td><label>HR1</label></td>
+            <td><label for="p2_hr1_color">RGB</label><input type="color" name="p2_hr1_color" value="{{p2_hr1_color}}" style="width: 40px; vertical-align: middle;">
+            <label for="p2_hr1_white">White</label><input type="range" name="p2_hr1_white" min="0" max="255" value="{{p2_hr1_white}}" step="1" style="width: 150px; vertical-align: middle;">
+            </td></tr>
+            <tr><td><label>MIN0</label></td>
+            <td><label for="p2_min0_color">RGB</label><input type="color" name="p2_min0_color" value="{{p2_min0_color}}" style="width: 40px; vertical-align: middle;">
+            <label for="p2_min0_white">White</label><input type="range" name="p2_min0_white" min="0" max="255" value="{{p2_min0_white}}" step="1" style="width: 150px; vertical-align: middle;">
+            </td></tr>
+            <tr><td><label>MIN1</label></td>
+            <td><label for="p2_min1_color">RGB</label><input type="color" name="p2_min1_color" value="{{p2_min1_color}}" style="width: 40px; vertical-align: middle;">
+            <label for="p2_min1_white">White</label><input type="range" name="p2_min1_white" min="0" max="255" value="{{p2_min1_white}}" step="1" style="width: 150px; vertical-align: middle;">
+            </td></tr>
+            </table>
+        </div>
+        <button type="button" class="accordion">Preset 3</button>
+        <div class="panel">
+            <label for="p3_name">Preset Name</label><input type="text" name="p3_name" value="{{p3_name}}"><br/><br/>
+            <table>
+            <tr><td><label>AM</label></td>
+            <td><label for="p3_am_color">RGB</label><input type="color" name="p3_am_color" value="{{p3_am_color}}" style="width: 40px; vertical-align: middle;">
+            <label for="p3_am_white">White</label><input type="range" name="p3_am_white" min="0" max="255" value="{{p3_am_white}}" step="1" style="width: 150px; vertical-align: middle;">
+            </td></tr>
+            <tr><td><label>PM</label></td>
+            <td><label for="p3_pm_color">RGB</label><input type="color" name="p3_pm_color" value="{{p3_pm_color}}" style="width: 40px; vertical-align: middle;">
+            <label for="p3_pm_white">White</label><input type="range" name="p3_pm_white" min="0" max="255" value="{{p3_pm_white}}" step="1" style="width: 150px; vertical-align: middle;">
+            </td></tr>
+            <tr><td><label>HR0</label></td>
+            <td><label for="p3_hr0_color">RGB</label><input type="color" name="p3_hr0_color" value="{{p3_hr0_color}}" style="width: 40px; vertical-align: middle;">
+            <label for="p3_hr0_white">White</label><input type="range" name="p3_hr0_white" min="0" max="255" value="{{p3_hr0_white}}" step="1" style="width: 150px; vertical-align: middle;">
+            </td></tr>
+            <tr><td><label>HR1</label></td>
+            <td><label for="p3_hr1_color">RGB</label><input type="color" name="p3_hr1_color" value="{{p3_hr1_color}}" style="width: 40px; vertical-align: middle;">
+            <label for="p3_hr1_white">White</label><input type="range" name="p3_hr1_white" min="0" max="255" value="{{p3_hr1_white}}" step="1" style="width: 150px; vertical-align: middle;">
+            </td></tr>
+            <tr><td><label>MIN0</label></td>
+            <td><label for="p3_min0_color">RGB</label><input type="color" name="p3_min0_color" value="{{p3_min0_color}}" style="width: 40px; vertical-align: middle;">
+            <label for="p3_min0_white">White</label><input type="range" name="p3_min0_white" min="0" max="255" value="{{p3_min0_white}}" step="1" style="width: 150px; vertical-align: middle;">
+            </td></tr>
+            <tr><td><label>MIN1</label></td>
+            <td><label for="p3_min1_color">RGB</label><input type="color" name="p3_min1_color" value="{{p3_min1_color}}" style="width: 40px; vertical-align: middle;">
+            <label for="p3_min1_white">White</label><input type="range" name="p3_min1_white" min="0" max="255" value="{{p3_min1_white}}" step="1" style="width: 150px; vertical-align: middle;">
+            </td></tr>
+            </table>
+        </div>
+        
+        <br/><br/>
+
+        <label class="container">Reset WiFi Login
+            <input type="checkbox" name="clear_wifi">
+            <span class="checkmark"></span>
+        </label>
+        <br/>
+        <button type="submit" class="button">Save & Restart</button>
+    </form>
+
+    <script>
+        // Accordion behavior for presets
+        var acc = document.getElementsByClassName("accordion");
+        var i;
+        for (i = 0; i < acc.length; i++) {
+          acc[i].addEventListener("click", function() {
+            this.classList.toggle("active");
+            var panel = this.nextElementSibling;
+            if (panel.style.display === "block") {
+              panel.style.display = "none";
+            } else {
+              panel.style.display = "block";
+            }
+          });
+        }
+    </script>
+  </body>
+</html>

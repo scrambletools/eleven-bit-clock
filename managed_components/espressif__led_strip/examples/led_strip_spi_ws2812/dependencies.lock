@@ -1,0 +1,19 @@
+dependencies:
+  espressif/led_strip:
+    dependencies:
+    - name: idf
+      version: '>=5.0'
+    source:
+      path: C:\Users\john\Development\pyramid_clock\eleven_bit_clock\managed_components\espressif__led_strip
+      type: local
+    version: 3.0.0
+  idf:
+    source:
+      type: idf
+    version: 5.5.0
+direct_dependencies:
+- espressif/led_strip
+- idf
+manifest_hash: f2aec6ed378d8782e4ece99a63e8adc6db87b607dccd64409cf99de462787f0c
+target: esp32c3
+version: 2.0.0

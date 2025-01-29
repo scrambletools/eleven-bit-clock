@@ -1,0 +1,110 @@
+menu "11-bit Clock Configuration"
+
+    menu "Default App Settings"
+        comment "Default app settings"
+
+        config ELEVEN_BIT_CLOCK_DEFAULT_PASSWORD
+            string "Default Password"
+            default ""
+            help
+                Password used to update clock settings.
+
+        config ELEVEN_BIT_CLOCK_DEFAULT_NTP_SERVER_1
+            string "Default NTP Server 1"
+            default "pool.ntp.org"
+            help
+                Default NTP server 1.
+
+        config ELEVEN_BIT_CLOCK_DEFAULT_NTP_SERVER_2
+            string "Default NTP Server 2"
+            default "time.nist.gov"
+            help
+                Default NTP server 2.
+
+        config ELEVEN_BIT_CLOCK_DEFAULT_GMT_OFFSET
+            int "Default GMT Offset"
+            default 0
+            help
+                Default GMT offset.
+    endmenu
+
+    menu "Wifi Captive Portal Configuration"
+        comment "Wifi Captive Portal Configuration"
+
+        config ESP_WIFI_AP_SSID
+            string "WiFi AP SSID"
+            default "Pyramid-Clock-Setup"
+            help
+                SSID (network name) of the captive portal AP for wifi setup.
+
+        config ESP_WIFI_AP_PASSWORD
+            string "WiFi AP Password"
+            default ""
+            help
+                WiFi password of the captive portal AP for wifi setup.
+
+        config ESP_WIFI_AP_CHANNEL
+            int "WiFi AP Channel"
+            range 1 14
+            default 1
+            help
+                WiFi channel (network channel) of the captive portal AP.
+
+        config ESP_MAX_STA_CONN_AP
+            int "Max allowed connections"
+            default 2
+            help
+                Max number of the simultaneous connections to the captive portal AP.
+    endmenu
+
+    menu "Wifi Connection Configuration"
+        comment "Wifi Setup (if blank then captive portal is activated)"
+
+        config ESP_WIFI_REMOTE_AP_SSID
+            string "WiFi Remote AP SSID"
+            default "Gildred"
+            help
+                SSID (network name) of the AP to connect to.
+
+        config ESP_WIFI_REMOTE_AP_PASSWORD
+            string "WiFi Remote AP Password"
+            default "bu3n0s41r3s"
+            help
+                WiFi password of the AP to connect to.
+
+        config ESP_MAXIMUM_STA_RETRY
+            int "Maximum retry"
+            default 5
+            help
+                Set the maximum retry value to prevent continuously
+                attempting to reconnect to the Access Point (AP) when the AP doesn't exist.
+
+        choice ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD
+            prompt "WiFi Scan auth mode threshold"
+            default ESP_WIFI_AUTH_OPEN
+            help
+                The weakest authmode to accept in the scan mode.
+                This value defaults to ESP_WIFI_AUTH_WPA2_PSK in case password is present
+                and ESP_WIFI_AUTH_OPEN is used. Please select ESP_WIFI_AUTH_WEP / ESP_WIFI_AUTH_WPA_PSK
+                in case AP is operating in WEP / WPA mode.
+
+            config ESP_WIFI_AUTH_OPEN
+                bool "OPEN"
+            config ESP_WIFI_AUTH_WEP
+                bool "WEP"
+            config ESP_WIFI_AUTH_WPA_PSK
+                bool "WPA PSK"
+            config ESP_WIFI_AUTH_WPA2_PSK
+                bool "WPA2 PSK"
+            config ESP_WIFI_AUTH_WPA_WPA2_PSK
+                bool "WPA/WPA2 PSK"
+            config ESP_WIFI_AUTH_WPA3_PSK
+                bool "WPA3 PSK"
+            config ESP_WIFI_AUTH_WPA2_WPA3_PSK
+                bool "WPA2/WPA3 PSK"
+            config ESP_WIFI_AUTH_WAPI_PSK
+                bool "WAPI PSK"
+        endchoice
+
+    endmenu
+endmenu
