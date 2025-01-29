@@ -1,0 +1,5 @@
+build/
+managed_components/
+*.lock
+sdkconfig
+.DS_Store
