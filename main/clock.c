@@ -55,11 +55,24 @@
 #include "esp_adc/adc_continuous.h"
 
 // GPIO assignment for touch input
-#define TOUCH_GPIO_PIN 4
+#define TOUCH_ADC_CHANNEL 4
+// GPIO assignment for touch input comparator
+#define TOUCH_COMP_CHANNEL 3
 // GPIO assignment for LED strip
-#define LED_STRIP_GPIO_PIN  20
+#define LED_STRIP_GPIO_PIN  2
 // Numbers of the LED in the strip
 #define LED_STRIP_LED_COUNT 11
+// Timeout for identify mode
+#define IDENTIFY_TIMEOUT 20000
+// Touch delta threshold 
+// (difference between touch and non-touch readings)
+#define TOUCH_DELTA_THRESHOLD 320
+// Touch jitter threshold 
+// (difference between consecutive readings while touching)
+#define TOUCH_JITTER_THRESHOLD 150
+// Touch count threshold 
+// (number of readings while touching to trigger identify mode)
+#define TOUCH_COUNT_THRESHOLD 3
 
 /* WiFi configuration that you can set via project configuration menu.
 
@@ -109,6 +122,49 @@
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #endif
 
+/* Google API URLs */
+#define GOOGLE_GEOLOCATION_API_URL "https://www.googleapis.com/geolocation/v1/geolocate?key=%s"
+/* example geolocation post data 
+Content-Type: application/json
+Body: {
+  "considerIp": "false",
+  "wifiAccessPoints": [
+    {
+      "macAddress": "3c:37:86:5d:75:d4",
+      "signalStrength": -35,
+      "signalToNoiseRatio": 0
+    },
+    {
+      "macAddress": "30:86:2d:c4:29:d0",
+      "signalStrength": -35,
+      "signalToNoiseRatio": 0
+    }
+  ]
+}
+*/
+/* example geolocation response
+{
+  "location": {
+    "lat": 37.4241173,
+    "lng": -122.0915717
+  },
+  "accuracy": 20
+}
+*/
+#define GOOGLE_TIMEZONE_API_URL "https://maps.googleapis.com/maps/api/timezone/json?location=%f,%f&timestamp=%d&key=%s"
+/* example request params
+location=39.6034810%2C-119.6822510&timestamp=1733428634
+*/
+/* example timezone response
+{
+  "dstOffset": 3600,
+  "rawOffset": -28800,
+  "status": "OK",
+  "timeZoneId": "America/Los_Angeles",
+  "timeZoneName": "Pacific Daylight Time",
+}
+*/
+
 /* ADC defines for touch detection */
 
 #define EXAMPLE_ADC_UNIT                    ADC_UNIT_1
@@ -121,6 +177,13 @@
 #define EXAMPLE_ADC_GET_CHANNEL(p_data)     ((p_data)->type2.channel)
 #define EXAMPLE_ADC_GET_DATA(p_data)        ((p_data)->type2.data)
 #define EXAMPLE_READ_LEN                    256
+
+/* Root page form fields validation status */
+#define FORM_VAL_STATUS_OK     0
+#define FORM_VAL_STATUS_RESTART 1
+#define FORM_VAL_STATUS_ERROR  -1
+#define FORM_VAL_STATUS_AUTH_INVALID  -2
+#define FORM_VAL_STATUS_FIELD_INVALID  -3
 
 /* HTML templates (copied from source files to flash) */
 
@@ -216,11 +279,9 @@ app_mode_t app_mode = APP_MODE_STARTUP;
 // Device IP address
 esp_ip4_addr_t device_ip;
 
-
-
 // ADC channels and task handle
 // Using GPIO 2; if more touch inputs are needed, add to this array
-static adc_channel_t channel[1] = {ADC_CHANNEL_2}; 
+static adc_channel_t channel[2] = {TOUCH_ADC_CHANNEL, TOUCH_COMP_CHANNEL}; 
 static TaskHandle_t s_task_handle;
 
 /* FreeRTOS event groups */
@@ -245,13 +306,15 @@ void print_mem_stats() {
 }
 
 // Function to replace substrings in a string (used for html templates)
-// This function can limit the use of memory by setting low maxChunkSize
-void replace_in_chunks(char *orig,
-                     size_t origMaxSize,
-                     const char *matchStrings[],
-                     const char *replacementStrings[],
-                     size_t numMatches,
-                     size_t maxChunkSize) {
+// You can limit the use of memory by setting low maxChunkSize
+void replace_in_chunks(
+    char *orig,
+    size_t origMaxSize,
+    const char *matchStrings[],
+    const char *replacementStrings[],
+    size_t numMatches,
+    size_t maxChunkSize
+) {
     typedef struct {
         size_t pos;        // position in orig string where match is found
         size_t matchLen;   // length of the match string
@@ -352,7 +415,7 @@ void replace_in_chunks(char *orig,
     free(occurrences);
 }
 
-// Function to decode a percent-encoded string
+/* Function to decode a URL-encoded string */
 void url_decode(char *dst, const char *src) {
     char a, b;
     while (*src) {
@@ -414,13 +477,14 @@ void set_timezone(int8_t offset) {
     tzset();
 }
 
-// Function to extract 's' and 'p' parameters from a URL-encoded string
+/* Function to extract 's' and 'p' parameters from a URL-encoded string */
 void extract_wifi_params(const char *query, char *s_value, char *p_value, size_t size) {
     char *query_copy = strdup(query);
     if (!query_copy) {
         perror("Failed to allocate memory");
         return;
     }
+    ESP_LOGI(TAG, "query_copy: %s", query_copy);
     char *token = strtok(query_copy, "&");
     while (token != NULL) {
         // Manually find the '=' character
@@ -433,6 +497,7 @@ void extract_wifi_params(const char *query, char *s_value, char *p_value, size_t
 
             char decoded_value[256];
             url_decode(decoded_value, value);
+            ESP_LOGI(TAG, "value: %s", value);
 
             if (strcmp(key, "s") == 0) {
                 memset(s_value, 0, size);
@@ -447,14 +512,14 @@ void extract_wifi_params(const char *query, char *s_value, char *p_value, size_t
     free(query_copy);
 }
 
-// Function to set config from a URL-encoded string
-bool set_config_from_params(const char *query, config_t *config) {
+/* Function to set config from a URL-encoded string */
+int set_config_from_params(const char *query, config_t *config) {
 
-    bool restart = false;
+    int ret = FORM_VAL_STATUS_OK;
     char *query_copy = strdup(query);
     if (!query_copy) {
         perror("Failed to allocate memory");
-        return restart;
+        return FORM_VAL_STATUS_ERROR;
     }
     char *token = strtok(query_copy, "&");
     char *temp_password = "";
@@ -471,16 +536,25 @@ bool set_config_from_params(const char *query, config_t *config) {
             url_decode(decoded_value, value);
             ESP_LOGI(TAG, "%s = %s", key, decoded_value);
 
+            // check that the correct password is provided for authentication
+            if (strcmp(key, "p") == 0) {
+                if (strcmp(decoded_value, config->clock_password) != 0) {
+                    ESP_LOGE(TAG, "Incorrect password");
+                    ESP_LOGI(TAG, "config->clock_password = %s", config->clock_password);
+                    return FORM_VAL_STATUS_AUTH_INVALID;
+                }
+            }
+
             // password and password confirm
             if (strcmp(key, "np") == 0 || strcmp(key, "npc") == 0) {
-                // if the password is not empty, remember it or compare with existing temp_password
+                // if the field is not empty, remember it or compare with existing temp_password
                 if (strcmp(decoded_value, "") != 0) {
                     if (strcmp(temp_password, "") == 0) {
-                        // if temp_password is empty, set the temp_password
+                        // if temp_password is not set, set it
                         temp_password = strdup(decoded_value);
                         if (!temp_password) {
                             ESP_LOGE(TAG, "Failed to allocate memory for temp_password");
-                            return restart;
+                            return FORM_VAL_STATUS_ERROR;
                         }
                     }
                     else {
@@ -488,13 +562,17 @@ bool set_config_from_params(const char *query, config_t *config) {
                         if (strcmp(temp_password, decoded_value) == 0) {
                             strncpy(config->clock_password, decoded_value, sizeof(config->clock_password) - 1);
                         }
+                        else {
+                            ESP_LOGE(TAG, "Password and confirm do not match");
+                            return FORM_VAL_STATUS_FIELD_INVALID;
+                        }
                     }
                 }
-                // if password confirm is empty, but password_temp is not empty, then return error
                 else {
+                    // if password confirm is empty, but password_temp is not empty, then return error
                     if (strcmp(key, "npc") == 0 && strcmp(temp_password, "") != 0) {
                         ESP_LOGE(TAG, "Password confirm is empty, but password_temp is not empty");
-                        return restart;
+                        return FORM_VAL_STATUS_FIELD_INVALID;
                     }
                 }
             // ntp server 1
@@ -630,7 +708,7 @@ bool set_config_from_params(const char *query, config_t *config) {
                 strncpy(config->wifi_ssid, "", sizeof(config->wifi_ssid) - 1);
                 strncpy(config->wifi_password, "", sizeof(config->wifi_password) - 1);
                 ESP_LOGI(TAG, "clearing wifi");
-                restart = true;
+                ret = FORM_VAL_STATUS_RESTART;
             }
         }
         token = strtok(NULL, "&");
@@ -638,7 +716,7 @@ bool set_config_from_params(const char *query, config_t *config) {
     free(query_copy);
     
     // return true if device needs to restart due to config change
-    return restart;
+    return ret;
 }
 
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
@@ -746,6 +824,7 @@ void time_sync_notification_cb(struct timeval *tv)
     //ESP_LOGI(TAG, "NTP time synchronized, time: %s", ctime((const time_t *)tv->tv_sec));
 }
 
+/* Save config to NVS */
 static int save_config(void) {
 
     // open NVS
@@ -801,6 +880,7 @@ static int load_config(void) {
     return ret;
 }
 
+/* Set the captive portal URL */
 static void dhcp_set_captiveportal_url(void) {
     // get the IP of the access point to redirect to
     esp_netif_ip_info_t ip_info;
@@ -825,9 +905,9 @@ static void dhcp_set_captiveportal_url(void) {
     ESP_ERROR_CHECK_WITHOUT_ABORT(esp_netif_dhcps_start(netif));
 }
 
-// HTTP GET setup root Handler
-// Loads the setup_root.html template, replaces all handlebar tokens
-// with the current config values and sends the result to the client
+/* HTTP GET setup root Handler
+ * Loads the setup_root.html template, replaces all handlebar tokens
+ * with the current config values and sends the result to the client */
 static esp_err_t setup_root_get_handler(httpd_req_t *req) {
 
     const uint32_t page_size = setup_root_template_end - setup_root_template_start;
@@ -865,9 +945,9 @@ static esp_err_t setup_root_get_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
-// HTTP GET root Handler
-// Loads the root.html template, replaces all handlebar tokens
-// with the current config values and sends the result to the client
+/* HTTP GET root Handler
+ * Loads the root.html template, replaces all handlebar tokens
+ * with the current config values and sends the result to the client */
 static esp_err_t root_get_handler(httpd_req_t *req) {
 
     // as this is a lengthy operation, we'll copy the app_config
@@ -1117,12 +1197,12 @@ static esp_err_t root_get_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
-// HTTP POST Handler
+/* HTTP POST Handler */
 static esp_err_t wifi_post_handler(httpd_req_t *req) {
 
     ESP_LOGI(TAG, "Process wifi post");
     
-     /* Destination buffer for content of HTTP POST request.
+    /* Destination buffer for content of HTTP POST request.
      * httpd_req_recv() accepts char* only, but content could
      * as well be any binary data (needs type casting).
      * In case of string data, null termination will be absent, and
@@ -1130,8 +1210,13 @@ static esp_err_t wifi_post_handler(httpd_req_t *req) {
     size_t max_content_length = 70;
     char content[max_content_length];
 
-    /* Truncate if content length larger than the buffer */
-    size_t recv_size = MIN(req->content_len, sizeof(content));
+    /* Truncate if content length is larger than the buffer */
+    size_t recv_size = req->content_len;
+    if (recv_size > max_content_length) {
+        recv_size = max_content_length;
+    }
+    ESP_LOGI(TAG, "req->content_len = %d", req->content_len);
+    ESP_LOGI(TAG, "recv_size = %d", recv_size);
 
     int ret = httpd_req_recv(req, content, recv_size);
     if (ret <= 0) {  /* 0 return value indicates connection closed */
@@ -1146,6 +1231,10 @@ static esp_err_t wifi_post_handler(httpd_req_t *req) {
          * ensure that the underlying socket is closed */
         return ESP_FAIL;
     }
+    // make the last byte a null terminator
+    content[recv_size] = '\0';
+    ESP_LOGI(TAG, "Posted setup = %s", content);
+
     // extract wifi params and update config
     extract_wifi_params(content, app_config->wifi_ssid, app_config->wifi_password, 32);
     ret = save_config();
@@ -1153,7 +1242,6 @@ static esp_err_t wifi_post_handler(httpd_req_t *req) {
         ESP_LOGE(TAG, "Failed to save config");
         return ESP_FAIL;
     }
-
     
     // Build the response message
     char response_message[100] = "Clock is restarting...";
@@ -1188,8 +1276,10 @@ static esp_err_t wifi_post_handler(httpd_req_t *req) {
     esp_restart();
 }
 
-// HTTP config POST Handler
+/* HTTP config POST Handler */
 static esp_err_t config_post_handler(httpd_req_t *req) {
+
+    bool restart = false;
 
     ESP_LOGI(TAG, "Process config post");
 
@@ -1205,8 +1295,11 @@ static esp_err_t config_post_handler(httpd_req_t *req) {
     size_t max_content_length = 1200;
     char content[max_content_length];
 
-    /* Truncate if content length larger than the buffer */
-    size_t recv_size = MIN(req->content_len, sizeof(content));
+    /* Truncate if content length is larger than the buffer */
+    size_t recv_size = req->content_len;
+    if (recv_size > max_content_length) {
+        recv_size = max_content_length;
+    }
     ESP_LOGI(TAG, "req->content_len = %d", req->content_len);
     ESP_LOGI(TAG, "recv_size = %d", recv_size);
 
@@ -1223,19 +1316,27 @@ static esp_err_t config_post_handler(httpd_req_t *req) {
          * ensure that the underlying socket is closed */
         return ESP_FAIL;
     }
-
     content[recv_size] = '\0';
     ESP_LOGI(TAG, "Posted config: %s", content);
 
+    // create a new config
+    config_t *new_config = (config_t *)malloc(sizeof(config_t));
+    assert(new_config && "Failed to allocate new config");
+    memcpy(new_config, app_config, sizeof(config_t));
+
     // remember old gmt offset for comparison
-    int old_gmt_offset = app_config->gmt_offset;
+    int old_gmt_offset = new_config->gmt_offset;
 
     // update app config from the posted params
-    bool restart = set_config_from_params(content, app_config);
-    ret = save_config();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to save config");
-        return ESP_FAIL;
+    ret = set_config_from_params(content, new_config);
+    if (ret == FORM_VAL_STATUS_RESTART) {
+        restart = true;
+    }
+
+    // save the new config
+    if (ret == FORM_VAL_STATUS_OK || ret == FORM_VAL_STATUS_RESTART) {
+        memcpy(app_config, new_config, sizeof(config_t));
+        ret = save_config();
     }
 
     // Set the timezone if the gmt offset has changed
@@ -1244,9 +1345,22 @@ static esp_err_t config_post_handler(httpd_req_t *req) {
     }
 
     // Set the response message
-    char response_message[100] = "Config updated";
-    if (restart) {
-        strcat(response_message, ", restarting...");
+    char response_message[100] = "";
+    switch (ret) {
+        case FORM_VAL_STATUS_ERROR:
+            strcat(response_message, "Unknown error.<br/>Config not updated.");
+            break;
+        case FORM_VAL_STATUS_AUTH_INVALID:
+            strcat(response_message, "Invalid password.<br/>Config not updated.");
+            break;
+        case FORM_VAL_STATUS_FIELD_INVALID:
+            strcat(response_message, "Invalid field.<br/>Config not updated.");
+            break;
+        case FORM_VAL_STATUS_RESTART:
+            strcat(response_message, "Config updated.<br/>Restarting...");
+            break;
+        default:
+            strcat(response_message, "Config updated.");
     }
 
     // copy the page to a new buffer in order to modify it
@@ -1266,7 +1380,8 @@ static esp_err_t config_post_handler(httpd_req_t *req) {
     const char *replacement_strings[] = {response_message};
     size_t num_match_strings = 1;
     replace_in_chunks(page, size, match_strings, replacement_strings, num_match_strings, max_chunk_size);
-    // send the page
+
+    // send the response page
     httpd_resp_set_type(req, "text/html");
     ret = httpd_resp_send(req, page, strlen(page));
     if (ret != ESP_OK) {
@@ -1279,9 +1394,10 @@ static esp_err_t config_post_handler(httpd_req_t *req) {
     if (restart) {
         esp_restart();
     }
-    return ESP_OK;
+    return ret;
 }
 
+/* HTTP CSS GET Handler */
 static esp_err_t css_get_handler(httpd_req_t *req) {
 
     ESP_LOGI(TAG, "Process css get");
@@ -1309,7 +1425,7 @@ static esp_err_t css_get_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
-// HTTP Error (404) Handler
+/* HTTP Error (404) Handler */
 esp_err_t http_404_error_handler(httpd_req_t *req, httpd_err_code_t err) {
     // Set status
     httpd_resp_set_status(req, "404 Not Found");
@@ -1343,7 +1459,7 @@ esp_err_t http_404_error_handler(httpd_req_t *req, httpd_err_code_t err) {
     return ESP_OK;
 }
 
-// HTTP Captive Portal (404) Handler - Redirects all requests to the root page
+/* HTTP Captive Portal (404) Handler - Redirects all requests to the root page */
 esp_err_t http_404_captiveportal_handler(httpd_req_t *req, httpd_err_code_t err) {
     // Set status
     httpd_resp_set_status(req, "302 Temporary Redirect");
@@ -1514,19 +1630,20 @@ void display_time_task(void *pvParameters) {
                                            pdFALSE,
                                            pdMS_TO_TICKS(500));
         if (bits & APP_MODE_IDENTIFY) {
-            // We are in identify mode, show the end of the IP address
-            uint16_t mac_bits = 0;
-            uint8_t last_quad = (uint8_t)((device_ip.addr >> 24) & 0xFF);
-            ESP_LOGI(TAG, "IP last quad: %d", last_quad);
-            mac_bits |= (last_quad >> 4) << 6; // most significant nibble
-            mac_bits |= (last_quad & 0x0F) << 1; // least significant nibble
-            print_display_bits(mac_bits);
 
-            // Setup time bits array for led strip api
-            bool mac_bits_array[11];
+            // We are in identify mode, show the end of the IP address
+            uint16_t ip_bits = 0;
+            uint8_t last_quad = (uint8_t)((device_ip.addr >> 24) & 0xFF);
+            //ESP_LOGI(TAG, "IP last quad: %d", last_quad);
+            ip_bits |= (last_quad >> 4) << 6; // most significant nibble
+            ip_bits |= (last_quad & 0x0F) << 1; // least significant nibble
+            //print_display_bits(ip_bits);
+
+            // Setup mac address bits array for led strip api
+            bool ip_bits_array[11];
             size_t count = 0;
             for (int i = 10; i >= 0; i--) {
-                mac_bits_array[count] = (mac_bits & (1 << i)) ? true : false;
+                ip_bits_array[count] = (ip_bits & (1 << i)) ? true : false;
                 count++;
             }
 
@@ -1540,10 +1657,10 @@ void display_time_task(void *pvParameters) {
                 // on the 8 pixels in the middle of the pyramid
                 if (i != 0 && i != 5 && i != 10) {
                     if (led_type == LED_MODEL_SK6812) {
-                        g = mac_bits_array[i] ? 50 : 5;
-                        w = mac_bits_array[i] ? 0 : 50;
+                        g = ip_bits_array[i] ? 50 : 0;
+                        w = ip_bits_array[i] ? 0 : 3;
                     } else {
-                        g = mac_bits_array[i] ? 50 : 1;
+                        g = ip_bits_array[i] ? 50 : 1;
                     }
                 }
                 // If SK6812, set pixel with RGBW, otherwise set pixel with RGB
@@ -1555,18 +1672,17 @@ void display_time_task(void *pvParameters) {
             }
             /* Refresh the strip to send data */
             ESP_ERROR_CHECK(led_strip_refresh(*led_strip));
-
-            vTaskDelay(pdMS_TO_TICKS(500));
         } else {
             time(&now);
             localtime_r(&now, &timeinfo);
             
-            // Setup time bits for led display
+            // Setup time bits array for led display
             uint16_t time_bits = 0;
-            time_bits |= (timeinfo.tm_hour > 12) << 10;     // PM bit
-            time_bits |= (timeinfo.tm_hour % 12) << 6;      // hours (in 4 bits)
-            time_bits |= (timeinfo.tm_min);                 // minutes (in 6 bits)
-            print_display_bits(time_bits);
+            time_bits |= (timeinfo.tm_hour > 11) << 10; // AM/PM (1 bit)
+            uint8_t hour = timeinfo.tm_hour==12 ? 12 : timeinfo.tm_hour % 12;
+            time_bits |= (hour) << 6;        // hours (in 4 bits)
+            time_bits |= (timeinfo.tm_min);  // minutes (in 6 bits)
+            //print_display_bits(time_bits);
 
             // Setup time bits array for led strip api
             bool time_bits_array[11];
@@ -1620,9 +1736,8 @@ void display_time_task(void *pvParameters) {
             }
             /* Refresh the strip to send data */
             ESP_ERROR_CHECK(led_strip_refresh(*led_strip));
-
-            vTaskDelay(pdMS_TO_TICKS(500));
         }
+        //vTaskDelay(pdMS_TO_TICKS(500));
     }
     vTaskDelete(NULL);
 }
@@ -1885,7 +2000,7 @@ void app_main(void)
         ESP_LOGI(TAG_STA, "Failed to connect to SSID:%s, password:%s",
                  app_config->wifi_ssid, app_config->wifi_password);
         app_mode = APP_MODE_SETUP;
-        flash_lights();
+        //flash_lights();
         start_captiveportal();
     } else {
         ESP_LOGE(TAG_STA, "UNEXPECTED EVENT, terminating.");
@@ -1914,10 +2029,13 @@ void app_main(void)
     ESP_ERROR_CHECK(adc_continuous_register_event_callbacks(handle, &cbs, NULL));
     ESP_ERROR_CHECK(adc_continuous_start(handle));
 
-    int touch_delta_threshold = 200;
-    int touch_jitter_threshold = 50;
-    int touch_count = 0;
-    int avg_data_prev = 0;
+    int identify_count = 0;     // count of activations of identify mode
+    int touch_count = 0;        // count of readings while touching
+    int avg_data_prev = 0;      // previous average of the touch readings
+    int avg_data_prev_comp = 0; // previous average of the comparator readings
+    int delta_prev = 0;         // previous delta
+    bool valley_prev = false;   // true when the previous reading dipped an amount >= 80% of the threshold
+    bool first_read = true;     // true when the first reading is taken
     
     // ADC loop to try reading data again after timeout (no data available)
     while (1) {
@@ -1943,10 +2061,18 @@ void app_main(void)
                     //We try to read `EXAMPLE_READ_LEN` until API returns timeout, which means there's no available data
                     break;
                 }
+                // The code below is not my proudest moment, but it works
+                // Lots of shenanigans to improve the touch detection robustness,
+                // but still gets occassional false positives due to wild swings in the ADC readings
                 if (ret == ESP_OK) {
                     //ESP_LOGI("TASK", "ret is %x, ret_num is %"PRIu32" bytes", ret, ret_num);
-                    int avg_data = 0;
-                    int data_count = 0;
+                    int avg_data = 0;        // average of the touch readings
+                    int avg_data_comp = 0;   // average of the comparator readings
+                    int data_count = 0;      // count of readings for the touch
+                    int data_count_comp = 0; // count of readings for the comparator
+                    int delta = 0;           // difference between current and previous reading
+                    
+                    // calculate the average of the readings for the touch and comparator
                     for (int i = 0; i < ret_num; i += SOC_ADC_DIGI_RESULT_BYTES) {
                         adc_digi_output_data_t *p = (adc_digi_output_data_t*)&result[i];
                         uint32_t chan_num = EXAMPLE_ADC_GET_CHANNEL(p);
@@ -1954,46 +2080,94 @@ void app_main(void)
                         /* Check the channel number validation, the data is invalid if the channel num exceed the maximum channel */
                         if (chan_num < SOC_ADC_CHANNEL_NUM(EXAMPLE_ADC_UNIT)) {
                             // handle cases here for each channel if you have more than one channel
-                            if (chan_num == ADC_CHANNEL_2) {
+                            if (chan_num == TOUCH_ADC_CHANNEL) {
                                 //ESP_LOGI(TAG, "Unit: %s, Channel: %"PRIu32", Value: %"PRIu32, unit, chan_num, data);
                                 avg_data += data;
                                 data_count++;
+                            }
+                            if (chan_num == TOUCH_COMP_CHANNEL) {
+                                //ESP_LOGI(TAG, "Unit: %s, Channel: %"PRIu32", Value: %"PRIu32, unit, chan_num, data);
+                                avg_data_comp += data;
+                                data_count_comp++;
                             }
                         } else {
                             ESP_LOGW(TAG, "Invalid data [%s_%"PRIu32"_%"PRIx32"]", unit, chan_num, data);
                         }
                     }
                     avg_data /= data_count;
-                    //ESP_LOGI(TAG, "Delta: %d", avg_data_prev - avg_data);
-                    if (touch_count > 3) {
+                    avg_data_comp /= data_count_comp;
+                    avg_data = avg_data - avg_data_comp; // diff between touch and comparator to reduce noise
+                    if (avg_data < 0) {
+                        avg_data += -2 * avg_data; // make sure avg_data is positive
+                    }
+                    delta = avg_data - avg_data_prev;
+                    if (delta > TOUCH_DELTA_THRESHOLD * 0.6) {
+                        ESP_LOGI(TAG, "Delta: %d, Prev: %d", delta, delta_prev);
+                    }
+                    if (delta_prev < TOUCH_DELTA_THRESHOLD * -0.8) {
+                        valley_prev = true;
+                        ESP_LOGI(TAG, "Prev was valley: %d", delta_prev);
+                    }
+                    
+                    // check if touch has initiated
+                    if (touch_count == 0) { 
+                        if (delta > TOUCH_DELTA_THRESHOLD) { // sufficient change on one reading
+                            touch_count++;
+                            if (first_read) { // if first reading, then ignore this reading
+                                touch_count = 0;
+                            } else if (valley_prev) { // if previous delta was a big drop, then ignore this reading
+                                touch_count = 0;
+                                valley_prev = false; // no need to check for valley again
+                            }
+                            ESP_LOGI(TAG, "Initiated touch, count: %d, first: %d, valley: %d, delta: %d, prev: %d", touch_count, first_read, valley_prev, delta, delta_prev);
+                        } else if ((delta + delta_prev) > TOUCH_DELTA_THRESHOLD) { // sufficient change over two readings
+                            touch_count++;
+                            if (first_read && delta_prev != 0) { // if second reading, ignore as well
+                                touch_count = 0;
+                                first_read = false; // no need to check for first read again
+                            } else if (valley_prev && delta_prev >= TOUCH_DELTA_THRESHOLD * -0.8) { // there was a valley before delta_prev
+                                touch_count = 0;
+                                valley_prev = false; // no need to check for valley again
+                            }
+                            ESP_LOGI(TAG, "Initiated touch, count: %d, first: %d, valley: %d, delta: %d, prev: %d", touch_count, first_read, valley_prev, delta, delta_prev);
+                        } else if (valley_prev && delta < TOUCH_DELTA_THRESHOLD * 0.5) {
+                            valley_prev = false; // no need to check for valley again
+                        }
+                    }
+                    // check if touch is sustained
+                    else if (touch_count > 0 && touch_count < TOUCH_COUNT_THRESHOLD) { 
+                        // increase touch count if sustained within delta threshold range
+                        if (delta > TOUCH_JITTER_THRESHOLD - TOUCH_DELTA_THRESHOLD) {
+                            touch_count++;
+                            ESP_LOGI(TAG, "Sustained touch, count: %d (delta: %d)", touch_count, delta);
+                            //ESP_LOGI(TAG, "Touch jitter, count: %d", touch_count);
+                        }
+                        // reset touch count if not sustained within jitter threshold
+                        else {
+                            touch_count = 0;
+                            ESP_LOGI(TAG, "Too much jitter, touch count reset (delta: %d)", delta);
+                        }
+                    }
+                    // if the touch count is at or above the threshold, set the app mode to identify
+                    else if (touch_count >= TOUCH_COUNT_THRESHOLD) {
                         app_mode = APP_MODE_IDENTIFY;
                         xEventGroupSetBits(s_app_event_group, APP_MODE_IDENTIFY);
+                        identify_count++;
+                        ESP_LOGI(TAG, "Identify mode activated, count: %d", identify_count);
                         touch_count = 0;
-                        avg_data_prev = 0;
                     }
-                    else if (touch_count > 0) { // sustained within jitter threshold while touching
-                        if ((avg_data_prev - avg_data) < touch_jitter_threshold 
-                        && (avg_data_prev - avg_data) > -touch_jitter_threshold) {
-                            //ESP_LOGI(TAG, "Touch jitter, count: %d", touch_count);
-                            touch_count++;
-                        }
-                    }
-                    else if (touch_count == 0) { // sufficient drop due to touch
-                        if ((avg_data_prev - avg_data) > touch_delta_threshold) {
-                            //ESP_LOGI(TAG, "Touched, count: %d", touch_count);
-                            touch_count++;
-                        }
-                    }
+                    // update previous data
                     avg_data_prev = avg_data; // update previous data
+                    delta_prev = delta;
                     /**
                      * Because printing is slow, so every time you call `ulTaskNotifyTake`, it will immediately return.
                      * To avoid a task watchdog timeout, add a delay here. When you replace the way you process the data,
                      * usually you don't need this delay (as this task will block for a while).
                      */
-                    //vTaskDelay(pdMS_TO_TICKS(100)); // avoid watchdog timeout
+                    vTaskDelay(pdMS_TO_TICKS(10)); // avoid watchdog timeout
                 }
             } else if (app_mode == APP_MODE_IDENTIFY) {
-                vTaskDelay(pdMS_TO_TICKS(10000)); // keep the identify mode for 10 seconds
+                vTaskDelay(pdMS_TO_TICKS(IDENTIFY_TIMEOUT)); // keep the identify mode for 10 seconds
                 app_mode = APP_MODE_NORMAL;
                 xEventGroupClearBits(s_app_event_group, APP_MODE_IDENTIFY);
             }

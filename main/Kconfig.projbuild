@@ -62,13 +62,13 @@ menu "11-bit Clock Configuration"
 
         config ESP_WIFI_REMOTE_AP_SSID
             string "WiFi Remote AP SSID"
-            default "Gildred"
+            default ""
             help
                 SSID (network name) of the AP to connect to.
 
         config ESP_WIFI_REMOTE_AP_PASSWORD
             string "WiFi Remote AP Password"
-            default "bu3n0s41r3s"
+            default ""
             help
                 WiFi password of the AP to connect to.
 

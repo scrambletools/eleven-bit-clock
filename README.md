@@ -23,3 +23,7 @@ device IP to access the web interface.
 
 This codes has been tested on the ESP32-C3, but should
 work on other ESP32 variants as well.
+
+Build notes:
+Make sure to rename secrets_rename.h to secrets.h and
+update the file with your appropriate api key(s)
