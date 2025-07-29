@@ -21,8 +21,9 @@ to the configured GPIO), the clock will display the last
 quad of its IP address allowing the user to identify the
 device IP to access the web interface.
 
-This codes has been tested on the ESP32-C3, but should
-work on other ESP32 variants as well.
+This code has been tested on the ESP32-C3, but should
+work on other ESP32 variants as well. It is used by the
+Pyramid Clock (www.pyramidclock.com).
 
 Build notes:
 Make sure to rename secrets_rename.h to secrets.h and
