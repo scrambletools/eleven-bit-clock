@@ -1673,8 +1673,11 @@ void display_time_task(void *pvParameters) {
             /* Refresh the strip to send data */
             ESP_ERROR_CHECK(led_strip_refresh(*led_strip));
         } else {
+
+            // We are in normal mode, show the time
             time(&now);
             localtime_r(&now, &timeinfo);
+            //ESP_LOGI(TAG, "Time: %d:%d", timeinfo.tm_hour, timeinfo.tm_min);
             
             // Setup time bits array for led display
             uint16_t time_bits = 0;
@@ -1824,25 +1827,28 @@ void startup_animation(void *pvParameters) {
 }
 
 /* flash lights when in AP captive portal */
-static void flash_lights(void) {
+
+void flash_lights(void *pvParameters) {
     ESP_LOGI(TAG, "Flashing lights");
-    
     bool led_on_off = true;
-    if (led_on_off) {
-        // Set pixel color for each led
-        for (int i = 0; i < 11; i++) {
-            if (led_type == LED_MODEL_SK6812) {
-                ESP_ERROR_CHECK(led_strip_set_pixel_rgbw(*led_strip, i, 0, 0, 0, 50));
-            } else {
-                ESP_ERROR_CHECK(led_strip_set_pixel(*led_strip, i, 50, 50, 50));
+    while (1) {
+        if (led_on_off) {
+            // Set pixel color for each led
+            for (int i = 0; i < 11; i++) {
+                if (led_type == LED_MODEL_SK6812) {
+                    ESP_ERROR_CHECK(led_strip_set_pixel_rgbw(*led_strip, i, 0, 0, 0, 50));
+                } else {
+                    ESP_ERROR_CHECK(led_strip_set_pixel(*led_strip, i, 50, 50, 50));
+                }
             }
+            ESP_ERROR_CHECK(led_strip_refresh(*led_strip));
+        } else {
+            ESP_ERROR_CHECK(led_strip_clear(*led_strip));
         }
-        ESP_ERROR_CHECK(led_strip_refresh(*led_strip));
         led_on_off = !led_on_off;
-    } else {
-        ESP_ERROR_CHECK(led_strip_clear(*led_strip));
+        vTaskDelay(pdMS_TO_TICKS(500));
     }
-    vTaskDelay(pdMS_TO_TICKS(500));
+    vTaskDelete(NULL);
 }
 
 static bool IRAM_ATTR s_conv_done_cb(adc_continuous_handle_t handle, const adc_continuous_evt_data_t *edata, void *user_data)
@@ -1960,14 +1966,16 @@ void app_main(void)
 
     /* Initialize STA */
     esp_netif_t *esp_netif_sta = NULL;
-    if (strcmp(app_config->wifi_ssid, "") != 0) {    
+    if (strcmp(app_config->wifi_ssid, "") != 0) { 
+        // If we have WiFi credentials, try to connect to the AP
         ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
         ESP_LOGI(TAG_STA, "ESP_WIFI_MODE_STA");
         esp_netif_sta = wifi_init_sta();
     } else {
+        // If we don't have WiFi credentials, start the captive portal
         ESP_LOGI(TAG_STA, "No WiFi credentials found, starting captive portal");
         app_mode = APP_MODE_SETUP;
-        flash_lights();
+        xTaskCreate(&flash_lights, "flash_lights", 2048, NULL, 5, NULL);
         start_captiveportal();
     }
 
@@ -2000,7 +2008,7 @@ void app_main(void)
         ESP_LOGI(TAG_STA, "Failed to connect to SSID:%s, password:%s",
                  app_config->wifi_ssid, app_config->wifi_password);
         app_mode = APP_MODE_SETUP;
-        //flash_lights();
+        xTaskCreate(&flash_lights, "flash_lights", 2048, NULL, 5, NULL);
         start_captiveportal();
     } else {
         ESP_LOGE(TAG_STA, "UNEXPECTED EVENT, terminating.");
