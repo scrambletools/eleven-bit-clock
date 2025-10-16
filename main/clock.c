@@ -1679,10 +1679,11 @@ void display_time_task(void *pvParameters) {
             localtime_r(&now, &timeinfo);
             //ESP_LOGI(TAG, "Time: %d:%d", timeinfo.tm_hour, timeinfo.tm_min);
             
-            // Setup time bits array for led display
+            // Setup time bits for led display
             uint16_t time_bits = 0;
             time_bits |= (timeinfo.tm_hour > 11) << 10; // AM/PM (1 bit)
             uint8_t hour = timeinfo.tm_hour==12 ? 12 : timeinfo.tm_hour % 12;
+            hour = hour==0 ? 12;             // midnight should display as 12
             time_bits |= (hour) << 6;        // hours (in 4 bits)
             time_bits |= (timeinfo.tm_min);  // minutes (in 6 bits)
             //print_display_bits(time_bits);
