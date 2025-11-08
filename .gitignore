@@ -1,6 +1,8 @@
 build/
 managed_components/
+.cache/
 *.lock
 sdkconfig   
 .DS_Store
 secrets.h
+sdkconfig.old
