@@ -13,6 +13,7 @@
  * This code also implements a wifi station and fallback
  * AP mode with captive portal to configure the wifi
  * station login credentials. If the device is unable to
+ *
  * connect to wifi after multiple tries, it will fall back
  * to AP mode and flash the leds to indicate this mode.
  *

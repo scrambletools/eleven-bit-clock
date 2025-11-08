@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include "esp_netif_ip_addr.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
