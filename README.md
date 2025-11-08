@@ -2,7 +2,7 @@
 
 This code implements a clock that displays time on
 an 11-pixel LED strip. The time is represented in
-binary with 1 bit for AM/PM, 4 bits for hours (0-12),
+binary with 1 bit for AM/PM, 4 bits for hours (1-12),
 and 6 bits for minutes (0-59). Time is obtained from
 an NTP server which can be configured via web interface.
 Other config options allow color customization with
@@ -21,9 +21,10 @@ to the configured GPIO), the clock will display the last
 quad of its IP address allowing the user to identify the
 device IP to access the web interface.
 
-This code has been tested on the ESP32-C3, but should
-work on other ESP32 variants as well. It is used by the
-Pyramid Clock (www.pyramidclock.com).
+Compatibility:
+This code has been tested on the ESP32-C3 using ESP-IDF v5+,
+but should work on other ESP32 variants as well. It is used
+by the Pyramid Clock (www.pyramidclock.com).
 
 Build notes:
 Make sure to rename secrets_rename.h to secrets.h and
