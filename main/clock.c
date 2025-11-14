@@ -132,6 +132,13 @@
 #define CSV_TOOL_MODE_OPTIONS 0
 #define CSV_TOOL_MODE_GET_CODE 1
 
+/* The following Google APIs are included here for
+ * reference only. They are not used as of yet, and
+ * they are not required for the clock to function.
+ * The clock currently supports 461 time zones,
+ * including support for daylight savings where needed.
+ */
+
 /* Google API URLs */
 #define GOOGLE_GEOLOCATION_API_URL                                             \
   "https://www.googleapis.com/geolocation/v1/geolocate?key=%s"
