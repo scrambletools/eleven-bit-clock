@@ -25,6 +25,7 @@
  *
  * This codes has been tested on the ESP32-C3, but should
  * work on other ESP32 variants as well.
+ * Last build on ESP-IDF 6.1
  */
 #include "dns_server.h"
 #include "esp_adc/adc_continuous.h"
@@ -40,6 +41,7 @@
 #include "lwip/sockets.h"
 #include "lwip/sys.h"
 #include "nvs_flash.h"
+#include "sdkconfig.h"
 #include <ctype.h>
 #include <esp_event.h>
 #include <esp_log.h>
@@ -51,6 +53,8 @@
 #include <freertos/FreeRTOSConfig.h>
 #include <freertos/event_groups.h>
 #include <freertos/task.h>
+#include <stddef.h>
+#include <stdio.h>
 #include <string.h>
 #include <sys/time.h>
 #include <time.h>
@@ -124,6 +128,10 @@
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #endif
 
+/* csv tools modes */
+#define CSV_TOOL_MODE_OPTIONS 0
+#define CSV_TOOL_MODE_GET_CODE 1
+
 /* Google API URLs */
 #define GOOGLE_GEOLOCATION_API_URL                                             \
   "https://www.googleapis.com/geolocation/v1/geolocate?key=%s"
@@ -171,7 +179,6 @@ location=39.6034810%2C-119.6822510&timestamp=1733428634
 */
 
 /* ADC defines for touch detection */
-
 #define EXAMPLE_ADC_UNIT ADC_UNIT_1
 #define _EXAMPLE_ADC_UNIT_STR(unit) #unit
 #define EXAMPLE_ADC_UNIT_STR(unit) _EXAMPLE_ADC_UNIT_STR(unit)
@@ -189,6 +196,11 @@ location=39.6034810%2C-119.6822510&timestamp=1733428634
 #define FORM_VAL_STATUS_ERROR -1
 #define FORM_VAL_STATUS_AUTH_INVALID -2
 #define FORM_VAL_STATUS_FIELD_INVALID -3
+
+/* Timezone data fields from csv file */
+#define MAX_TIMEZONE_LEN 32
+#define MAX_TIMECODE_LEN 64
+#define MAX_TIMEZONES 461
 
 /* HTML templates (copied from source files to flash) */
 
@@ -208,6 +220,16 @@ extern const char style_template_end[] asm("_binary_style_css_end");
 // response.html
 extern const char response_template_start[] asm("_binary_response_html_start");
 extern const char response_template_end[] asm("_binary_response_html_end");
+
+// timezones.csv
+extern const char timezone_data_start[] asm("_binary_timezones_csv_start");
+extern const char timezone_data_end[] asm("_binary_timezones_csv_end");
+
+// timezone data
+struct TzData {
+  char timezone[MAX_TIMEZONE_LEN];
+  char code[MAX_TIMECODE_LEN];
+};
 
 /* Data structures */
 
@@ -231,7 +253,8 @@ typedef struct {
 typedef struct {
   char ntp_server_1[32];
   char ntp_server_2[32];
-  int8_t gmt_offset; // -12 to 12
+  char time_zone[32];
+  char time_zone_code[64];
   char wifi_ssid[32];
   char wifi_password[32];
   char clock_password[32];
@@ -314,6 +337,119 @@ void print_mem_stats() {
   ESP_LOGI(TAG, "-----------------------------------");
 }
 
+/**
+ * The input format is expected to be pairs of values, with each value in double
+ * quotes, separated by a comma. Each pair is separated by a newline ('\n') or
+ * carriage return ('\r'). Example:
+ * "\"value1a\",\"value1b\"\n\"value2a\",\"value2b\"\r\n"
+ */
+int csv_tool(const int mode, const char *match_str, const char *input,
+             char *output, const int max_pairs, const int output_size) {
+  if (!input || !output) {
+    return -1;
+  }
+  const char *p = input;
+  int pair_count = 0;
+  char option_str[100] = "";
+  bool found = false;
+
+  while (*p != '\0' && pair_count < max_pairs) {
+    // --- Skip leading whitespace and newlines ---
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+      if (*p == '\0')
+        break;
+      p++;
+    }
+    if (*p == '\0')
+      break;
+
+    // --- Parse first value (timezone) ---
+    if (*p != '"')
+      goto line_error; // Expect opening quote
+    p++;               // Move past quote
+    const char *value_start = p;
+    while (*p != '"' && *p != '\0') {
+      p++;
+    }
+    if (*p != '"')
+      goto line_error; // Expect closing quote
+
+    size_t len = p - value_start;
+    if (len >= MAX_TIMEZONE_LEN) {
+      ESP_LOGI(TAG, "Error: timezone value exceeds buffer size on pair %d.\n",
+               pair_count);
+      len = MAX_TIMEZONE_LEN - 1; // Truncate
+    }
+
+    // process first value: if in mode 0, then append an option tag
+    if (mode == CSV_TOOL_MODE_OPTIONS) {
+      if (memcmp(match_str, value_start, len) == 0) {
+        sprintf(option_str, "<option selected>%.*s</option>\n", len,
+                value_start);
+        ESP_LOGI(TAG, "%.*s", len, value_start);
+      } else {
+        sprintf(option_str, "<option>%.*s</option>\n", len, value_start);
+      }
+      strcat(output, option_str);
+    }
+    if (memcmp(match_str, value_start, len) == 0) {
+      found = true;
+    }
+
+    p++; // Move past quote
+
+    // --- Find comma ---
+    while (*p == ' ' || *p == '\t')
+      p++; // Skip space before comma
+    if (*p != ',')
+      goto line_error;
+    p++; // Move past comma
+    while (*p == ' ' || *p == '\t')
+      p++; // Skip space after comma
+
+    // --- Parse second value (code) ---
+    if (*p != '"')
+      goto line_error; // Expect opening quote
+    p++;               // Move past quote
+    value_start = p;
+    while (*p != '"' && *p != '\0') {
+      p++;
+    }
+    if (*p != '"')
+      goto line_error; // Expect closing quote
+
+    len = p - value_start;
+    if (len >= MAX_TIMECODE_LEN) {
+      ESP_LOGI(TAG, "Error: code value exceeds buffer size on pair %d.\n",
+               pair_count);
+      len = MAX_TIMECODE_LEN - 1; // Truncate
+    }
+
+    // process second value: if in mode 1 and a match is found, then set the
+    // time code as the output
+    if (found && mode == CSV_TOOL_MODE_GET_CODE) {
+      memcpy(output, value_start, len);
+      ESP_LOGI(TAG, "%.*s", len, value_start);
+      return 1;
+    }
+    p++; // Move past quote
+
+    pair_count++;
+
+  // --- Consume rest of the line ---
+  line_error:
+    while (*p != '\n' && *p != '\r' && *p != '\0') {
+      p++;
+    }
+  }
+  // return pair count unless in mode 1 where return 0 indicates not found
+  if (mode == CSV_TOOL_MODE_OPTIONS) {
+    return pair_count;
+  } else {
+    return 0;
+  }
+}
+
 // Function to replace substrings in a string (used for html templates)
 // You can limit the use of memory by setting low maxChunkSize
 void replace_in_chunks(char *orig, size_t origMaxSize,
@@ -370,9 +506,8 @@ void replace_in_chunks(char *orig, size_t origMaxSize,
     }
   }
 
-  // Current length of the string
-  size_t curLen = strlen(orig);
-  long offset = 0; // how much we've shifted so far
+  size_t curLen = strlen(orig); // Current length of the string
+  long offset = 0;              // how much we've shifted so far
 
   // Replace all occurrences
   for (size_t i = 0; i < occCount; i++) {
@@ -474,25 +609,6 @@ color_t hex_to_color(const char *hex) {
   }
 
   return color;
-}
-
-/* Set the timezone */
-void set_timezone(int8_t offset) {
-  char *tz_name = "UTC";
-  char tz_str[8];
-  if (offset > 0) {
-    sprintf(tz_str, "%s%-d", tz_name, offset); // change offset direction
-  } else {
-    if (offset < 0) {
-      offset = -offset;
-      sprintf(tz_str, "%s%+d", tz_name, offset); // change offset direction
-    } else {
-      sprintf(tz_str, "%s+0", tz_name);
-    }
-  }
-  ESP_LOGI(TAG, "TZ: %s", tz_str);
-  setenv("TZ", tz_str, 1);
-  tzset();
 }
 
 /* Function to extract 's' and 'p' parameters from a URL-encoded string */
@@ -604,9 +720,14 @@ int set_config_from_params(const char *query, config_t *config) {
       } else if (strcmp(key, "ntp_server_2") == 0) {
         strncpy(config->ntp_server_2, decoded_value,
                 sizeof(config->ntp_server_2) - 1);
-        // clock gmt offset
-      } else if (strcmp(key, "gmt_offset") == 0) {
-        config->gmt_offset = atoi(decoded_value);
+        // time zone
+      } else if (strcmp(key, "time_zone") == 0) {
+        strncpy(config->time_zone, decoded_value,
+                sizeof(config->time_zone) - 1);
+        // time zone code
+      } else if (strcmp(key, "time_zone_code") == 0) {
+        strncpy(config->time_zone_code, decoded_value,
+                sizeof(config->time_zone_code) - 1);
         // active preset
       } else if (strcmp(key, "active_preset") == 0) {
         config->active_preset = atoi(decoded_value);
@@ -994,15 +1115,20 @@ static esp_err_t setup_root_get_handler(httpd_req_t *req) {
  * with the current config values and sends the result to the client */
 static esp_err_t root_get_handler(httpd_req_t *req) {
 
+  // ESP_LOGI("httpd", "boop!");
+  // info_lwm("httpd", "going to allocate time zone string1");
+
   // as this is a lengthy operation, we'll copy the app_config
   // in case it may be accessed by another task
   config_t config;
   memcpy(&config, app_config, sizeof(config_t));
 
+  // info_lwm("httpd", "going to allocate time zone string2");
+
   // setup array of match strings
   const size_t max_size_match_string = 20;
   const char *match_strings[] = {
-      "{{ntp_server_1}}",  "{{ntp_server_2}}",  "{{gmt_offset}}",
+      "{{ntp_server_1}}",  "{{ntp_server_2}}",  "{{time_zone}}",
       "{{active_preset}}", "{{p1_name}}",       "{{p1_am_color}}",
       "{{p1_am_white}}",   "{{p1_pm_color}}",   "{{p1_pm_white}}",
       "{{p1_hr0_color}}",  "{{p1_hr0_white}}",  "{{p1_hr1_color}}",
@@ -1021,26 +1147,12 @@ static esp_err_t root_get_handler(httpd_req_t *req) {
   const size_t num_match_strings =
       sizeof(match_strings) / sizeof(match_strings[0]);
 
-  // build the replacement string for the gmt offset
-  char gmt_offset_str[1260] = ""; // 50 * 25 + 10
-  for (int i = 12; i >= -12; i--) {
-    char option_str[60];
-    char display_str[12];
-    if (i == 0) {
-      sprintf(display_str, "No offset");
-    } else if (i > 0) {
-      sprintf(display_str, "GMT +%d hrs", i);
-    } else {
-      sprintf(display_str, "GMT %d hrs", i);
-    }
-    if (i == config.gmt_offset) {
-      sprintf(option_str, "<option value=\"%d\" selected>%s</option>\n", i,
-              display_str);
-    } else {
-      sprintf(option_str, "<option value=\"%d\">%s</option>\n", i, display_str);
-    }
-    strcat(gmt_offset_str, option_str);
-  }
+  // build the replacement string for time zone
+  size_t tz_str_size =
+      23060; // 461 * (32 for name + 19 for html) + 9 for selected
+  char *time_zone_str = (char *)malloc(tz_str_size);
+  csv_tool(CSV_TOOL_MODE_OPTIONS, config.time_zone, timezone_data_start,
+           time_zone_str, MAX_TIMEZONES, tz_str_size);
 
   // build the replacement string for the active preset
   size_t num_presets = 3;
@@ -1160,9 +1272,9 @@ static esp_err_t root_get_handler(httpd_req_t *req) {
 
   // setup replacement strings
   size_t max_size_replacement_string =
-      32; // not including the gmt_offset_str and active_preset_str
+      32; // not including the time_zone_str and active_preset_str
   const char *replacement_strings[] = {
-      config.ntp_server_1,     config.ntp_server_2,     gmt_offset_str,
+      config.ntp_server_1,     config.ntp_server_2,     time_zone_str,
       active_preset_str,       config.preset_1.name,    preset_1_am_color_str,
       preset_1_am_white_str,   preset_1_pm_color_str,   preset_1_pm_white_str,
       preset_1_hr0_color_str,  preset_1_hr0_white_str,  preset_1_hr1_color_str,
@@ -1183,16 +1295,16 @@ static esp_err_t root_get_handler(httpd_req_t *req) {
 
   // copy the page to a new buffer in order to modify it
   const uint32_t page_size = root_template_end - root_template_start;
-  /// ESP_LOGI(TAG, "page_size = %lu", page_size);
+  ESP_LOGI(TAG, "unfilled page size = %lu", page_size);
   const uint32_t size =
       page_size +
       (uint32_t)(num_match_strings *
                      (max_size_replacement_string - max_size_match_string) *
                      1.1 +
-                 sizeof(gmt_offset_str) +
-                 sizeof(active_preset_str)); // assume match strings are
+                 strlen(time_zone_str) +
+                 strlen(active_preset_str)); // assume match strings are
                                              // used 1.1 times on avg
-  // ESP_LOGI(TAG, "size = %lu", size);
+  ESP_LOGI(TAG, "filled page size = %lu", size);
 
   char *page = (char *)malloc(size);
   assert(page && "Failed to allocate page");
@@ -1215,6 +1327,7 @@ static esp_err_t root_get_handler(httpd_req_t *req) {
   info_lwm("httpd", "Served root");
 
   // free heap memory
+  free(time_zone_str);
   free(page);
 
   return ESP_OK;
@@ -1344,29 +1457,34 @@ static esp_err_t config_post_handler(httpd_req_t *req) {
   content[recv_size] = '\0';
   ESP_LOGI(TAG, "Posted config: %s", content);
 
-  // create a new config
+  // create a new temporary config
   config_t *new_config = (config_t *)malloc(sizeof(config_t));
   assert(new_config && "Failed to allocate new config");
   memcpy(new_config, app_config, sizeof(config_t));
 
-  // remember old gmt offset for comparison
-  int old_gmt_offset = new_config->gmt_offset;
+  // remember old timezone for comparison
+  char old_time_zone[MAX_TIMECODE_LEN];
+  memcpy(old_time_zone, new_config->time_zone, MAX_TIMEZONE_LEN);
 
-  // update app config from the posted params
+  // update the temporary config using the posted params
   ret = set_config_from_params(content, new_config);
   if (ret == FORM_VAL_STATUS_RESTART) {
     restart = true;
+  }
+
+  // Set the timezone if changed
+  if (strcmp(old_time_zone, new_config->time_zone) != 0) {
+    csv_tool(CSV_TOOL_MODE_GET_CODE, new_config->time_zone, timezone_data_start,
+             new_config->time_zone_code, MAX_TIMEZONES, MAX_TIMECODE_LEN);
+    ESP_LOGI(TAG, "Updated time zone code to %s", new_config->time_zone_code);
+    setenv("TZ", new_config->time_zone_code, 1);
+    tzset();
   }
 
   // save the new config
   if (ret == FORM_VAL_STATUS_OK || ret == FORM_VAL_STATUS_RESTART) {
     memcpy(app_config, new_config, sizeof(config_t));
     ret = save_config();
-  }
-
-  // Set the timezone if the gmt offset has changed
-  if (old_gmt_offset != app_config->gmt_offset) {
-    set_timezone(app_config->gmt_offset);
   }
 
   // Set the response message
@@ -1628,8 +1746,9 @@ void print_display_bits(uint16_t time_bits) {
 /* Display time (normal mode) or end of IP address (identify mode) */
 void display_time_task(void *pvParameters) {
 
-  // Get config from task parameters, setup led strip
+  // pvParameters is not used in this task
   // config_t *config = (config_t *)pvParameters;
+  (void)pvParameters; // Suppress unused parameter warning
 
   time_t now = 0;
   struct tm timeinfo = {0};
@@ -1645,7 +1764,7 @@ void display_time_task(void *pvParameters) {
       // We are in identify mode, show the end of the IP address
       uint16_t ip_bits = 0;
       uint8_t last_quad = (uint8_t)((device_ip.addr >> 24) & 0xFF);
-      // ESP_LOGI(TAG, "IP last quad: %d", last_quad);
+      ESP_LOGI(TAG, "IP last quad: %d", last_quad);
       ip_bits |= (last_quad >> 4) << 6;   // most significant nibble
       ip_bits |= (last_quad & 0x0F) << 1; // least significant nibble
       // print_display_bits(ip_bits);
@@ -1688,7 +1807,7 @@ void display_time_task(void *pvParameters) {
       // We are in normal mode, show the time
       time(&now);
       localtime_r(&now, &timeinfo);
-      // ESP_LOGI(TAG, "Time: %d:%d", timeinfo.tm_hour, timeinfo.tm_min);
+      ESP_LOGI(TAG, "Time: %d:%d", timeinfo.tm_hour, timeinfo.tm_min);
 
       // Setup time bits for led display
       uint16_t time_bits = 0;
@@ -1698,7 +1817,7 @@ void display_time_task(void *pvParameters) {
         hour = 12;                    // midnight should display as 12
       time_bits |= (hour) << 6;       // hours (in 4 bits)
       time_bits |= (timeinfo.tm_min); // minutes (in 6 bits)
-      // print_display_bits(time_bits);
+      print_display_bits(time_bits);
 
       // Setup time bits array for led strip api
       bool time_bits_array[11];
@@ -1709,7 +1828,7 @@ void display_time_task(void *pvParameters) {
       }
 
       config_t *config = app_config;
-      // ESP_LOGI(TAG, "Active preset: %d", config->active_preset);
+      ESP_LOGI(TAG, "Active preset: %d", config->active_preset);
 
       preset_t *preset = &config->preset_1;
       if (config->active_preset == 2) {
@@ -1826,6 +1945,9 @@ static void start_clock(void) {
 
 /* play the startup animation */
 void startup_animation(void *pvParameters) {
+
+  (void)pvParameters; // Suppress unused parameter warning
+
   ESP_LOGI(TAG, "Playing startup animation");
 
   const uint8_t NUM_LEDS = 11;    /* The amount of pixels/leds you have */
@@ -1844,10 +1966,11 @@ void startup_animation(void *pvParameters) {
                                                 BRIGHTNESS));
       }
       ESP_ERROR_CHECK(led_strip_refresh(*led_strip));
-      vTaskDelay(pdMS_TO_TICKS(
-          5)); /* Change this to your hearts desire, the lower the value the
-                  faster your colors move (and vice versa) */
+      vTaskDelay(
+          pdMS_TO_TICKS(5)); /* Change this to your hearts desire, the lower the
+                        value the faster your colors move (and vice versa) */
     }
+    // }
   }
   vTaskDelete(NULL);
 }
@@ -1855,9 +1978,20 @@ void startup_animation(void *pvParameters) {
 /* flash lights when in AP captive portal */
 
 void flash_lights(void *pvParameters) {
+
+  (void)pvParameters; // Suppress unused parameter warning
+
   ESP_LOGI(TAG, "Flashing lights");
   bool led_on_off = true;
-  while (1) {
+
+  while (true) {
+    // Check if we are in identify mode
+    EventBits_t bits =
+        xEventGroupWaitBits(s_app_event_group, APP_MODE_SETUP, pdFALSE, pdFALSE,
+                            pdMS_TO_TICKS(500));
+    if (bits & !APP_MODE_SETUP) {
+      break;
+    }
     if (led_on_off) {
       // Set pixel color for each led
       for (int i = 0; i < 11; i++) {
@@ -1872,7 +2006,7 @@ void flash_lights(void *pvParameters) {
       ESP_ERROR_CHECK(led_strip_clear(*led_strip));
     }
     led_on_off = !led_on_off;
-    vTaskDelay(pdMS_TO_TICKS(500));
+    // vTaskDelay(pdMS_TO_TICKS(500));
   }
   vTaskDelete(NULL);
 }
@@ -1900,7 +2034,7 @@ static void continuous_adc_init(adc_channel_t *channel, uint8_t channel_num,
   adc_continuous_config_t dig_cfg = {
       .sample_freq_hz = 620, // minimum for ESP32C3 is 611
       .conv_mode = EXAMPLE_ADC_CONV_MODE,
-      .format = EXAMPLE_ADC_OUTPUT_TYPE,
+      // .format = EXAMPLE_ADC_OUTPUT_TYPE,
   };
 
   adc_digi_pattern_config_t adc_pattern[SOC_ADC_PATT_LEN_MAX] = {0};
@@ -1926,6 +2060,10 @@ void app_main(void) {
   // Setup led strip
   led_strip = calloc(1, sizeof(led_strip_handle_t));
   *led_strip = configure_led();
+
+  /* Initialize event groups */
+  s_wifi_event_group = xEventGroupCreate();
+  s_app_event_group = xEventGroupCreate();
 
   // Startup animation
   xTaskCreate(&startup_animation, "startup_animation", 2048, NULL, 5, NULL);
@@ -1964,22 +2102,25 @@ void app_main(void) {
          strlen(CONFIG_ELEVEN_BIT_CLOCK_DEFAULT_NTP_SERVER_1));
   memcpy(app_config->ntp_server_2, CONFIG_ELEVEN_BIT_CLOCK_DEFAULT_NTP_SERVER_2,
          strlen(CONFIG_ELEVEN_BIT_CLOCK_DEFAULT_NTP_SERVER_2));
-  app_config->gmt_offset = CONFIG_ELEVEN_BIT_CLOCK_DEFAULT_GMT_OFFSET;
+  memcpy(app_config->time_zone, CONFIG_ELEVEN_BIT_CLOCK_DEFAULT_TIME_ZONE,
+         strlen(CONFIG_ELEVEN_BIT_CLOCK_DEFAULT_TIME_ZONE));
 
   // load config
   ret = load_config();
   if (ret != ESP_OK) {
     printf("Failed to read config from NVS. Using defaults.\n");
   }
+  ESP_LOGI(TAG, "Loaded config.");
 
-  // Set the timezone
-  set_timezone(app_config->gmt_offset);
+  // Set the timezone, default to UTC if missing
+  if (strlen(app_config->time_zone_code) == 0) {
+    strcpy(app_config->time_zone_code, "UTC0");
+  }
+  ESP_LOGI(TAG_STA, "Config tz code: %s", app_config->time_zone_code);
+  setenv("TZ", app_config->time_zone_code, 1);
+  tzset();
 
   ESP_LOGI(TAG_STA, "Config ssid: %s", app_config->wifi_ssid);
-
-  /* Initialize event groups */
-  s_wifi_event_group = xEventGroupCreate();
-  s_app_event_group = xEventGroupCreate();
 
   /* Register Event handler */
   ESP_ERROR_CHECK(esp_event_handler_instance_register(
@@ -1993,7 +2134,8 @@ void app_main(void) {
 
   /* Initialize STA */
   esp_netif_t *esp_netif_sta = NULL;
-  if (strcmp(app_config->wifi_ssid, "") != 0) {
+  const char *ssid = app_config->wifi_ssid; // Prevent optimization
+  if (strcmp(ssid, "") != 0) {
     // If we have WiFi credentials, try to connect to the AP
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_LOGI(TAG_STA, "ESP_WIFI_MODE_STA");
@@ -2001,7 +2143,8 @@ void app_main(void) {
   } else {
     // If we don't have WiFi credentials, start the captive portal
     ESP_LOGI(TAG_STA, "No WiFi credentials found, starting captive portal");
-    app_mode = APP_MODE_SETUP;
+    volatile app_mode_t mode = APP_MODE_SETUP; // Prevent optimization
+    app_mode = mode;
     xTaskCreate(&flash_lights, "flash_lights", 2048, NULL, 5, NULL);
     start_captiveportal();
   }
@@ -2063,26 +2206,27 @@ void app_main(void) {
   ESP_ERROR_CHECK(adc_continuous_register_event_callbacks(handle, &cbs, NULL));
   ESP_ERROR_CHECK(adc_continuous_start(handle));
 
-  int identify_count = 0;     // count of activations of identify mode
-  int touch_count = 0;        // count of readings while touching
-  int avg_data_prev = 0;      // previous average of the touch readings
-  int avg_data_prev_comp = 0; // previous average of the comparator readings
-  int delta_prev = 0;         // previous delta
-  bool valley_prev = false;   // true when the previous reading dipped an amount
-                              // >= 80% of the threshold
-  bool first_read = true;     // true when the first reading is taken
+  int identify_count = 0; // count of activations of identify mode
+  int touch_count = 0;    // count of readings while touching
+  int avg_data_prev = 0;  // previous average of the touch readings
+  // int avg_data_prev_comp = 0; // previous average of the comparator
+  // readings
+  int delta_prev = 0;       // previous delta
+  bool valley_prev = false; // true when the previous reading dipped an amount
+                            // >= 80% of the threshold
+  bool first_read = true;   // true when the first reading is taken
 
   // ADC loop to try reading data again after timeout (no data available)
   while (1) {
     /**
      * This is to show you the way to use the ADC continuous mode driver event
-     * callback. This `ulTaskNotifyTake` will block when the data processing in
-     * the task is fast. However in this example, the data processing (print) is
-     * slow, so you barely block here.
+     * callback. This `ulTaskNotifyTake` will block when the data processing
+     * in the task is fast. However in this example, the data processing
+     * (print) is slow, so you barely block here.
      *
      * Without using this event callback (to notify this task), you can still
-     * just call `adc_continuous_read()` here in a loop, with/without a certain
-     * block timeout.
+     * just call `adc_continuous_read()` here in a loop, with/without a
+     * certain block timeout.
      */
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
@@ -2096,14 +2240,14 @@ void app_main(void) {
             adc_continuous_read(handle, result, EXAMPLE_READ_LEN, &ret_num, 0);
         if (ret == ESP_ERR_TIMEOUT) {
           // ESP_LOGI(TAG, "Timeout reading ADC");
-          // We try to read `EXAMPLE_READ_LEN` until API returns timeout, which
-          // means there's no available data
+          // We try to read `EXAMPLE_READ_LEN` until API returns timeout,
+          // which means there's no available data
           break;
         }
         // The code below is not my proudest moment, but it works
         // Lots of shenanigans to improve the touch detection robustness,
-        // but still gets occassional false positives due to wild swings in the
-        // ADC readings
+        // but still gets occassional false positives due to wild swings in
+        // the ADC readings
         if (ret == ESP_OK) {
           // ESP_LOGI("TASK", "ret is %x, ret_num is %"PRIu32" bytes", ret,
           // ret_num);
@@ -2113,7 +2257,8 @@ void app_main(void) {
           int data_count_comp = 0; // count of readings for the comparator
           int delta = 0; // difference between current and previous reading
 
-          // calculate the average of the readings for the touch and comparator
+          // calculate the average of the readings for the touch and
+          // comparator
           for (int i = 0; i < ret_num; i += SOC_ADC_DIGI_RESULT_BYTES) {
             adc_digi_output_data_t *p = (adc_digi_output_data_t *)&result[i];
             uint32_t chan_num = EXAMPLE_ADC_GET_CHANNEL(p);
@@ -2124,14 +2269,14 @@ void app_main(void) {
               // handle cases here for each channel if you have more than one
               // channel
               if (chan_num == TOUCH_ADC_CHANNEL) {
-                // ESP_LOGI(TAG, "Unit: %s, Channel: %"PRIu32", Value: %"PRIu32,
-                // unit, chan_num, data);
+                // ESP_LOGI(TAG, "Unit: %s, Channel: %"PRIu32", Value:
+                // %"PRIu32, unit, chan_num, data);
                 avg_data += data;
                 data_count++;
               }
               if (chan_num == TOUCH_COMP_CHANNEL) {
-                // ESP_LOGI(TAG, "Unit: %s, Channel: %"PRIu32", Value: %"PRIu32,
-                // unit, chan_num, data);
+                // ESP_LOGI(TAG, "Unit: %s, Channel: %"PRIu32", Value:
+                // %"PRIu32, unit, chan_num, data);
                 avg_data_comp += data;
                 data_count_comp++;
               }
@@ -2181,9 +2326,9 @@ void app_main(void) {
                 touch_count = 0;
                 first_read = false; // no need to check for first read again
               } else if (valley_prev &&
-                         delta_prev >=
-                             TOUCH_DELTA_THRESHOLD *
-                                 -0.8) { // there was a valley before delta_prev
+                         delta_prev >= TOUCH_DELTA_THRESHOLD *
+                                           -0.8) { // there was a valley
+                                                   // before delta_prev
                 touch_count = 0;
                 valley_prev = false; // no need to check for valley again
               }

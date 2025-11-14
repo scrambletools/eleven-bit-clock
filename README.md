@@ -22,10 +22,10 @@ quad of its IP address allowing the user to identify the
 device IP to access the web interface.
 
 Compatibility:
-This code has been tested on the ESP32-C3 using ESP-IDF v5+,
+This code has been tested on the ESP32-C3 using ESP-IDF v6.1,
 but should work on other ESP32 variants as well. It is used
-by the Pyramid Clock (www.pyramidclock.com).
+by the Pyramid Clock (<www.pyramidclock.com>).
 
 Build notes:
 Make sure to rename secrets_rename.h to secrets.h and
-update the file with your appropriate api key(s)
+update the file with your appropriate api key(s).
